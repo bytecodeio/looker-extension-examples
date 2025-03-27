@@ -1,0 +1,85 @@
+view: floorplan_sample_data {
+  sql_table_name: `big-query-sales-demo.looker_scratch.floorplan_sample_data` ;;
+
+  dimension: acoustics_score {
+    type: number
+    sql: ${TABLE}.acoustics_score ;;
+  }
+  dimension: coordinates {
+    type: string
+    sql: ${TABLE}.coordinates ;;
+  }
+  dimension: desirability_score_numeric {
+    type: number
+    value_format_name: decimal_0
+    sql: ${TABLE}.desirability_score_numeric ;;
+  }
+  dimension: floorplan {
+    type: string
+    sql: ${TABLE}.floorplan ;;
+  }
+  dimension: list_price {
+    type: number
+    value_format_name: usd_0
+    sql: ${TABLE}.list_price ;;
+  }
+  dimension: list_price_per_lsf_ratio {
+    type: number
+    value_format_name: decimal_2
+    sql: ${TABLE}.list_price_per_lsf_ratio ;;
+  }
+  dimension: list_price_per_seat {
+    value_format_name: usd_0
+    type: number
+    sql: ${TABLE}.list_price_per_seat ;;
+  }
+  dimension: location_id {
+    type: string
+    sql: ${TABLE}.location_id ;;
+  }
+  dimension: lsf_per_seat_ratio {
+    value_format_name: decimal_2
+    type: number
+    sql: ${TABLE}.lsf_per_seat_ratio ;;
+  }
+  dimension: office_number {
+    type: number
+    sql: ${TABLE}.office_number ;;
+  }
+  dimension: office_status {
+    type: string
+    sql: ${TABLE}.office_status ;;
+  }
+  dimension: product_code {
+    type: string
+    sql: ${TABLE}.product_code ;;
+  }
+  dimension: seats {
+    type: number
+    value_format_name: decimal_0
+    sql: ${TABLE}.seats ;;
+  }
+  dimension: seats_ratio {
+    value_format_name: decimal_2
+    type: number
+    sql: ${TABLE}.seats_ratio ;;
+  }
+  dimension: sun_score {
+    value_format_name: decimal_0
+    type: number
+    sql: ${TABLE}.sun_score ;;
+  }
+  dimension: two_yr_price {
+    value_format_name: usd_0
+    type: number
+    sql: ${TABLE}.two_yr_price ;;
+  }
+  dimension: view_score {
+    value_format_name: decimal_0
+    type: number
+    sql: ${TABLE}.view_score ;;
+  }
+  measure: count {
+    type: count
+  }
+}
