@@ -1,9 +1,8 @@
 import React, { useState } from 'react'
 import { TabbedDash } from './TabbedDash'
 import { ExtensionProvider } from '@looker/extension-sdk-react'
-import { hot } from 'react-hot-loader/root'
 
-export const App: React.FC<{}> = hot(() => {
+export const App: React.FC<{}> = () => {
   const [route, setRoute] = useState('')
   const [routeState, setRouteState] = useState()
 
@@ -17,4 +16,4 @@ export const App: React.FC<{}> = hot(() => {
       <TabbedDash route={route} routeState={routeState} />
     </ExtensionProvider>
   )
-})
+}

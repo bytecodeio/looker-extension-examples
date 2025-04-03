@@ -10,6 +10,7 @@ import {
 import { EmbedDashboard } from './components/Embed'
 import { TabbedDashProps, ConfigurationData } from './types'
 import { allowedNodeEnvironmentFlags } from 'process'
+import { DashboardData } from './components/DashboardData'
 
 export enum ROUTES {
   EMBED_DASHBOARD = '/',
@@ -124,11 +125,15 @@ export const TabbedDash: React.FC<TabbedDashProps> = ({
             <MessageBar intent="critical">{initializeError}</MessageBar>
           ) : (
               <Route path={ROUTES.EMBED_DASHBOARD}>
-                <EmbedDashboard
+                {/* <EmbedDashboard
                   dashboards={configurationData.dashboards}
                   configurationData={configurationData}
                   updateConfigurationData={updateConfigurationData}
                   isAdmin={isAdmin}
+                /> */}
+                <DashboardData
+                  dashboardId={String(configurationData.dashboards[0].id)}
+                  
                 />
               </Route>
           )}

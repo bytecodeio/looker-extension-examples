@@ -1,5 +1,3 @@
-
-
 ## Getting Started for Development
 
 1. Clone or download a copy of this template to your development machine
@@ -18,11 +16,9 @@
    yarn start
    ```
 
-   Great! Your extension is now running and serving the JavaScript at http://localhost:8080/bundle.js.
+   Great! Your extension is now running and serving the JavaScript at https://localhost:8080/bundle.js.
 
-   > **Note well:** The webpack development server also supports https. To use, add the parameter --https to the start command
-   > `"start": "webpack-dev-server --hot --disable-host-check --https"`
-   > Should you decide to use https, you should visit the bundle URL you are running as there will likely be a certificate warning. The development server runs with a self-signed SSL certificate, so you will need to accept this to allow your browser to connect to it.
+   > **Note:** The webpack development server runs with HTTPS by default. You may see a certificate warning in your browser which you'll need to accept to proceed.
 
    The default yarn start command runs with hot module replacement working. Some changes will cause a full reload of the extension iframe. When this happens the extension framework connection will break. You should see an error. You will need to do a full page reload of the outer page.
 
