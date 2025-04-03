@@ -57,7 +57,7 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       try {
         // Get dashboard details
         const dashboardData = await sdk.ok(sdk.dashboard(dashboardId))
-        setDashboard(dashboardData)
+        setDashboard(dashboardData as IDashboard)
         
         // Extract dashboard filters
         if (dashboardData.dashboard_filters && dashboardData.dashboard_filters.length > 0) {
