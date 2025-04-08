@@ -19,7 +19,8 @@ import {
   ButtonOutline,
   Divider,
   FlexItem,
-  Flex
+  Flex,
+  Combobox
 } from '@looker/components'
 import { IDashboard, IDashboardElement, IDashboardFilter } from '@looker/sdk'
 
@@ -37,6 +38,10 @@ interface FilterState {
   [key: string]: string | boolean | string[]
 }
 
+interface FilterSuggestions {
+  [key: string]: string[]
+}
+
 export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> = ({ dashboardId }) => {
   const extensionContext = useContext<ExtensionContextData>(ExtensionContext)
   const sdk = extensionContext.core40SDK
@@ -48,6 +53,8 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   const [queryResults, setQueryResults] = useState<QueryResult[]>([])
   const [filterState, setFilterState] = useState<FilterState>({})
   const [queryBodies, setQueryBodies] = useState<any[]>([])
+  const [filterSuggestions, setFilterSuggestions] = useState<FilterSuggestions>({})
+  const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false)
   
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -69,6 +76,9 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             initialFilterState[filter.name] = filter.default_value || ''
           })
           setFilterState(initialFilterState)
+          
+          // Fetch suggestions for string-type filters
+          fetchFilterSuggestions(dashboardData.dashboard_filters)
         }
         
         // Extract query bodies from dashboard elements
@@ -122,24 +132,87 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       setError('No dashboard ID provided')
       setLoading(false)
     }
-  }, [dashboardId, sdk])
+  }, [dashboardId])
   
-  const executeQueries = async (bodies: any[], filters: FilterState) => {
-    setLoading(true)
+  // Fetch suggestions for string-type filters
+  const fetchFilterSuggestions = async (filters: IDashboardFilter[]) => {
+    setLoadingSuggestions(true)
+    const suggestions: FilterSuggestions = {}
     
     try {
-      const results: QueryResult[] = []
+      console.log('Fetching filter suggestions...', filters)
+      // Create an array of promises for parallel execution
+      const suggestionPromises = filters
+        .filter(filter => filter.field?.type === 'string' && filter.dimension)
+        .map(async (filter) => {
+          console.log('Fetching suggestions for filter:', filter.name)
+          try {
+            const [view, field] = filter?.field?.suggest_dimension?.split('.') || []
+            const model = filter?.model 
+            console.log('Filter model, view, field:', model, view, field)
+            // Skip if we don't have complete info
+            if (!model || !view || !field) return null
+            
+            // Create a query to fetch distinct values
+            const queryResponse = await sdk.ok(sdk.run_inline_query({
+              body: {
+                model: model,
+                view: view,
+                fields: [filter?.field?.suggest_dimension],
+                filters: {},
+                limit: '500',
+                sorts: [filter.dimension + ' asc']
+              },
+              result_format: 'json'
+            }))
+            console.log('Filter Query response:', queryResponse)
+            // Extract values from response
+            const values = queryResponse.map(row => {
+              const key = Object.keys(row)[0]
+              return row[key]?.toString() || ''
+            }).filter(Boolean)
+            
+            return { name: filter.name, values }
+          } catch (error) {
+            console.error(`Error fetching suggestions for filter ${filter.name}:`, error)
+            return null
+          }
+        })
       
-      for (const item of bodies) {
+      // Wait for all suggestion queries to complete
+      const results = await Promise.all(suggestionPromises)
+      console.log('Filter suggestions results:', results)
+      // Add successful results to suggestions object
+      results
+        .filter(Boolean)
+        .forEach(result => {
+          if (result) {
+            suggestions[result.name] = result.values
+          }
+        })
+      console.log('Filter suggestions fetched:', suggestions)
+      setFilterSuggestions(suggestions)
+    } catch (error) {
+      console.error('Error fetching filter suggestions:', error)
+    } finally {
+      setLoadingSuggestions(false)
+    }
+  }
+  
+  const executeQueries = async (bodies: any[], filters: FilterState) => {
+    try {
+      setLoading(true)
+      
+      // Create an array of promises for all queries to run in parallel
+      const queryPromises = bodies.map(async (item) => {
         try {
-          // Apply any active filters to the query body
           const queryBody = { ...item.queryBody }
           
-          // Update filters in the query
+          // Apply filters to the query body
+          if (Object.keys(filters).length > 0) console.log('Applying filters:', filters)
           Object.keys(filters).forEach(filterName => {
             const filterValue = filters[filterName]
             if (filterValue && filterValue !== '') {
-              // Find the corresponding dashboard filter to get the dimension
               const dashFilter = dashboardFilters.find(df => df.name === filterName)
               if (dashFilter && dashFilter.dimension) {
                 queryBody.filters[dashFilter.dimension] = filterValue.toString()
@@ -147,29 +220,66 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             }
           })
           
-          // Run the inline query
-          const queryData = await sdk.ok(sdk.run_inline_query({
+          // Execute the query
+          const result = await sdk.ok(sdk.run_inline_query({
             body: queryBody,
             result_format: 'json'
           }))
           
-          results.push({
+          // Return the result with metadata
+          return {
+            success: true,
             elementId: item.elementId || '',
             elementTitle: item.elementTitle || 'Untitled Element',
-            data: queryData
-          })
-        } catch (queryError) {
-          console.error(`Error running inline query for element ${item.elementId}:`, queryError)
+            data: result
+          }
+        } catch (error) {
+          console.error(`Error processing query for element ${item.elementId}:`, error)
+          return {
+            success: false,
+            elementId: item.elementId || '',
+            elementTitle: item.elementTitle || 'Untitled Element',
+            error
+          }
         }
+      })
+      
+      // Wait for all queries to complete in parallel
+      const results = await Promise.all(queryPromises)
+      
+      // Filter only successful results
+      const successfulResults = results
+        .filter(result => result.success)
+        .map(({ elementId, elementTitle, data }) => ({
+          elementId,
+          elementTitle,
+          data
+        }))
+      
+      // Log any errors
+      const failedQueries = results.filter(result => !result.success)
+      if (failedQueries.length > 0) {
+        console.error(`${failedQueries.length} queries failed:`, failedQueries)
       }
       
-      setQueryResults(results)
+      console.log('All queries completed, updating results state...')
+      setQueryResults(successfulResults)
     } catch (err) {
       console.error('Error executing queries:', err)
       setError(`Failed to execute queries: ${err.message || 'Unknown error'}`)
     } finally {
       setLoading(false)
     }
+  }
+  
+  const applyFilters = (e) => {
+    // Prevent default form submission behavior which might cause navigation
+    if (e && e.preventDefault) {
+      e.preventDefault()
+    }
+    
+    // Prevent unnecessary re-renders by ensuring state updates are minimal
+    executeQueries(queryBodies, filterState)
   }
   
   const handleFilterChange = (filterName: string, value: string | boolean | string[]) => {
@@ -180,14 +290,11 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     setFilterState(newFilterState)
   }
   
-  const applyFilters = () => {
-    executeQueries(queryBodies, filterState)
-  }
-  
   // Render filter controls based on filter type
   const renderFilterControl = (filter: IDashboardFilter) => {
     const filterType = filter.field?.type || 'string'
     const currentValue = filterState[filter.name]
+    const suggestions = filterSuggestions[filter.name] || []
     
     switch (filterType) {
       case 'boolean':
@@ -208,9 +315,28 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           />
         )
       case 'string':
+        // If we have suggestions, use a FieldSelect component instead of Combobox
+        if (suggestions.length > 0) {
+          return (
+            <FieldSelect
+              label={filter.title || filter.name}
+              options={suggestions.map(option => ({ value: option, label: option }))}
+              value={currentValue as string || ''}
+              onChange={(value) => handleFilterChange(filter.name, value)}
+              placeholder="Select a value"
+            />
+          )
+        } else {
+          // Fall back to text field if no suggestions
+          return (
+            <FieldText
+              label={filter.title || filter.name}
+              value={currentValue as string || ''}
+              onChange={(e) => handleFilterChange(filter.name, e.target.value)}
+            />
+          )
+        }
       default:
-        // For simplicity, using a text field for all string filters
-        // In a real app, you might want to use different controls based on ui_config
         return (
           <FieldText
             label={filter.title || filter.name}
@@ -272,8 +398,17 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           
           {dashboardFilters.length > 0 && (
             <Box mb="large" p="medium" border="1px solid" borderColor="neutral-300" borderRadius="medium">
-              <Form>
+              <Form onSubmit={(e) => {
+                // Explicitly prevent form submission
+                e.preventDefault()
+                applyFilters(e)
+              }}>
                 <Heading as="h3" mb="small">Dashboard Filters</Heading>
+                {loadingSuggestions && (
+                  <Box mb="small">
+                    <Spinner size={20} /> Loading filter suggestions...
+                  </Box>
+                )}
                 <Flex flexWrap="wrap" gap="medium">
                   {dashboardFilters.map(filter => (
                     <FlexItem key={filter.id} width="250px">
@@ -281,7 +416,9 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
                     </FlexItem>
                   ))}
                   <FlexItem alignSelf="flex-end">
-                    <ButtonOutline onClick={applyFilters}>
+                    <ButtonOutline 
+                      type="button" 
+                      onClick={(e) => applyFilters(e)}>
                       Apply Filters
                     </ButtonOutline>
                   </FlexItem>

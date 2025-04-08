@@ -34,6 +34,7 @@ import _ from 'lodash'
 import { BsGear } from 'react-icons/bs'
 
 import * as XLSX from 'xlsx'
+import { DashboardData, DashboardDataWithFilters } from '../DashboardData'
 
 export const EmbedDashboard: React.FC<EmbedProps> = ({
   dashboards,
@@ -185,14 +186,16 @@ export const EmbedDashboard: React.FC<EmbedProps> = ({
           {configurationData.dashboards.map(({ title }, index) => {
             return (
               <Tab2 key={index.toString()} id={index.toString()} label={title}>
-                <Dashboard
+                {/* <Dashboard
                   key={index.toString()}
                   id={configurationData.dashboards[index]['id']}
                   running={running}
                   theme={configurationData.theme}
                   extensionContext={extensionContext}
                   setDashboard={setupDashboard}
-                />
+                /> */}
+                <DashboardDataWithFilters
+                  dashboardId={String(configurationData.dashboards[index].id)}/>
               </Tab2>
             )
           })}
