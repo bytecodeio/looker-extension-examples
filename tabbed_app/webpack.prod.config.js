@@ -59,5 +59,11 @@ module.exports = {
   },
   plugins: [
     new webpack.DefinePlugin(env_config())
-  ]
+  ],
+  externals: {
+    react: 'React',
+    'react-dom': 'ReactDOM',
+    '@looker/components': '@looker/components',
+    '@looker/extension-utils': '@looker/extension-utils',
+  },
 }

@@ -20,9 +20,16 @@ import {
   Divider,
   FlexItem,
   Flex,
-  Combobox
+  Tabs2,
+  Tab2,
+  FieldCheckbox,
+  ButtonGroup,
+  ButtonItem
 } from '@looker/components'
 import { IDashboard, IDashboardElement, IDashboardFilter } from '@looker/sdk'
+import ReactECharts from 'echarts-for-react'
+import * as echarts from 'echarts'
+import { getChartConfigByTitle } from './chartConfigs'
 
 interface DashboardDataWithFiltersProps {
   dashboardId: string
@@ -55,6 +62,8 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   const [queryBodies, setQueryBodies] = useState<any[]>([])
   const [filterSuggestions, setFilterSuggestions] = useState<FilterSuggestions>({})
   const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false)
+  const [chartPreferences, setChartPreferences] = useState<Record<string, string>>({})
+  const [autoSelectChartType, setAutoSelectChartType] = useState<boolean>(true)
   
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -62,26 +71,21 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       setError(null)
       
       try {
-        // Get dashboard details
         const dashboardData = await sdk.ok(sdk.dashboard(dashboardId))
         setDashboard(dashboardData as IDashboard)
         
-        // Extract dashboard filters
         if (dashboardData.dashboard_filters && dashboardData.dashboard_filters.length > 0) {
           setDashboardFilters(dashboardData.dashboard_filters)
           
-          // Initialize filter state with empty values
           const initialFilterState: FilterState = {}
           dashboardData.dashboard_filters.forEach(filter => {
             initialFilterState[filter.name] = filter.default_value || ''
           })
           setFilterState(initialFilterState)
           
-          // Fetch suggestions for string-type filters
           fetchFilterSuggestions(dashboardData.dashboard_filters)
         }
         
-        // Extract query bodies from dashboard elements
         const bodies: any[] = []
         
         for (const element of dashboardData.dashboard_elements || []) {
@@ -115,7 +119,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
         
         setQueryBodies(bodies)
         
-        // Execute queries with initial filter state
         await executeQueries(bodies, {})
         
       } catch (err) {
@@ -134,26 +137,19 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }, [dashboardId])
   
-  // Fetch suggestions for string-type filters
   const fetchFilterSuggestions = async (filters: IDashboardFilter[]) => {
     setLoadingSuggestions(true)
     const suggestions: FilterSuggestions = {}
     
     try {
-      console.log('Fetching filter suggestions...', filters)
-      // Create an array of promises for parallel execution
       const suggestionPromises = filters
         .filter(filter => filter.field?.type === 'string' && filter.dimension)
         .map(async (filter) => {
-          console.log('Fetching suggestions for filter:', filter.name)
           try {
             const [view, field] = filter?.field?.suggest_dimension?.split('.') || []
             const model = filter?.model 
-            console.log('Filter model, view, field:', model, view, field)
-            // Skip if we don't have complete info
             if (!model || !view || !field) return null
             
-            // Create a query to fetch distinct values
             const queryResponse = await sdk.ok(sdk.run_inline_query({
               body: {
                 model: model,
@@ -165,8 +161,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
               },
               result_format: 'json'
             }))
-            console.log('Filter Query response:', queryResponse)
-            // Extract values from response
             const values = queryResponse.map(row => {
               const key = Object.keys(row)[0]
               return row[key]?.toString() || ''
@@ -179,10 +173,7 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           }
         })
       
-      // Wait for all suggestion queries to complete
       const results = await Promise.all(suggestionPromises)
-      console.log('Filter suggestions results:', results)
-      // Add successful results to suggestions object
       results
         .filter(Boolean)
         .forEach(result => {
@@ -190,7 +181,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             suggestions[result.name] = result.values
           }
         })
-      console.log('Filter suggestions fetched:', suggestions)
       setFilterSuggestions(suggestions)
     } catch (error) {
       console.error('Error fetching filter suggestions:', error)
@@ -203,13 +193,10 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     try {
       setLoading(true)
       
-      // Create an array of promises for all queries to run in parallel
       const queryPromises = bodies.map(async (item) => {
         try {
           const queryBody = { ...item.queryBody }
           
-          // Apply filters to the query body
-          if (Object.keys(filters).length > 0) console.log('Applying filters:', filters)
           Object.keys(filters).forEach(filterName => {
             const filterValue = filters[filterName]
             if (filterValue && filterValue !== '') {
@@ -220,13 +207,11 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             }
           })
           
-          // Execute the query
           const result = await sdk.ok(sdk.run_inline_query({
             body: queryBody,
             result_format: 'json'
           }))
           
-          // Return the result with metadata
           return {
             success: true,
             elementId: item.elementId || '',
@@ -244,10 +229,8 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
         }
       })
       
-      // Wait for all queries to complete in parallel
       const results = await Promise.all(queryPromises)
       
-      // Filter only successful results
       const successfulResults = results
         .filter(result => result.success)
         .map(({ elementId, elementTitle, data }) => ({
@@ -256,13 +239,11 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           data
         }))
       
-      // Log any errors
       const failedQueries = results.filter(result => !result.success)
       if (failedQueries.length > 0) {
         console.error(`${failedQueries.length} queries failed:`, failedQueries)
       }
       
-      console.log('All queries completed, updating results state...')
       setQueryResults(successfulResults)
     } catch (err) {
       console.error('Error executing queries:', err)
@@ -273,12 +254,9 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   }
   
   const applyFilters = (e) => {
-    // Prevent default form submission behavior which might cause navigation
     if (e && e.preventDefault) {
       e.preventDefault()
     }
-    
-    // Prevent unnecessary re-renders by ensuring state updates are minimal
     executeQueries(queryBodies, filterState)
   }
   
@@ -290,7 +268,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     setFilterState(newFilterState)
   }
   
-  // Render filter controls based on filter type
   const renderFilterControl = (filter: IDashboardFilter) => {
     const filterType = filter.field?.type || 'string'
     const currentValue = filterState[filter.name]
@@ -315,7 +292,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           />
         )
       case 'string':
-        // If we have suggestions, use a FieldSelect component instead of Combobox
         if (suggestions.length > 0) {
           return (
             <FieldSelect
@@ -327,7 +303,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             />
           )
         } else {
-          // Fall back to text field if no suggestions
           return (
             <FieldText
               label={filter.title || filter.name}
@@ -347,11 +322,370 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }
   
-  // Helper function to render table data
-  const renderQueryData = (data: any[]) => {
+  const determineChartType = (data: any[], elementTitle: string): string => {
+    const customConfig = getChartConfigByTitle(elementTitle)
+    if (customConfig) {
+      return customConfig.type
+    }
+
+    if (!autoSelectChartType && chartPreferences[elementTitle]) {
+      return chartPreferences[elementTitle]
+    }
+
+    if (!data || data.length === 0) return 'table'
+    
+    const columns = Object.keys(data[0])
+    if (columns.length < 2) return 'table'
+    
+    const dateColumnPattern = /date|time|year|month|day|quarter|week/i
+    const hasDateColumn = columns.some(column => 
+      dateColumnPattern.test(column) || 
+      (typeof data[0][column] === 'string' && /^\d{4}-\d{2}-\d{2}/.test(data[0][column]))
+    )
+    
+    const numericColumns = columns.filter(column => 
+      typeof data[0][column] === 'number' || 
+      (!isNaN(parseFloat(data[0][column])) && 
+       !column.toLowerCase().includes('id') &&
+       !column.toLowerCase().endsWith('_id'))
+    )
+    
+    const dimensionColumns = columns.filter(column => 
+      column.toLowerCase().includes('name') || 
+      column.toLowerCase().includes('category') ||
+      column.toLowerCase().includes('type') ||
+      column.toLowerCase().includes('segment')
+    )
+    
+    if (hasDateColumn && numericColumns.length >= 1) {
+      return 'line'
+    } else if (data.length >= 10 && numericColumns.length >= 1) {
+      return 'bar'
+    } else if (data.length <= 10 && numericColumns.length === 1 && dimensionColumns.length >= 1) {
+      return 'pie'
+    } else if (numericColumns.length >= 2) {
+      return 'scatter'
+    } else if (numericColumns.length >= 1) {
+      return 'bar'
+    }
+    
+    return 'table'
+  }
+  
+  const generateChartOptions = (data: any[], chartType: string, elementTitle: string): any => {
+    if (!data || data.length === 0) return {}
+    
+    const customConfig = getChartConfigByTitle(elementTitle)
+    if (customConfig) {
+      if (customConfig.customRenderer) {
+        const dynamicConfig = customConfig.customRenderer(data)
+        if (dynamicConfig) {
+          return mergeDeep(
+            { ...customConfig.options }, 
+            dynamicConfig
+          )
+        }
+      }
+      return customConfig.options
+    }
+    
+    const columns = Object.keys(data[0])
+    
+    let dimensionColumn = columns[0]
+    
+    const dimensionCandidates = columns.filter(col => 
+      /name|category|type|segment|region|country|state|city|product|date|time|year|month|day/i.test(col)
+    )
+    
+    if (dimensionCandidates.length > 0) {
+      if (chartType === 'line') {
+        const dateColumns = dimensionCandidates.filter(col => 
+          /date|time|year|month|day|quarter|week/i.test(col)
+        )
+        dimensionColumn = dateColumns.length > 0 ? dateColumns[0] : dimensionCandidates[0]
+      } else {
+        dimensionColumn = dimensionCandidates[0]
+      }
+    }
+    
+    const measureColumns = columns.filter(col => 
+      (typeof data[0][col] === 'number' || !isNaN(parseFloat(data[0][col]))) &&
+      !col.toLowerCase().includes('id') &&
+      !col.toLowerCase().endsWith('_id')
+    )
+    
+    const dimensions = data.map(item => {
+      const value = item[dimensionColumn]
+      if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+        return value.split('T')[0]
+      }
+      return value
+    })
+    
+    const theme = {
+      colors: [
+        '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', 
+        '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc'
+      ],
+      title: {
+        textStyle: {
+          fontWeight: 'normal',
+          fontSize: 14
+        }
+      },
+      grid: {
+        containLabel: true,
+        left: '3%',
+        right: '4%',
+        bottom: '3%'
+      },
+      tooltip: {
+        confine: true,
+        textStyle: {
+          fontSize: 12
+        }
+      }
+    }
+    
+    switch(chartType) {
+      case 'line':
+        return {
+          title: { text: elementTitle || 'Trend Analysis' },
+          tooltip: { 
+            trigger: 'axis',
+            formatter: (params: any) => {
+              let result = `${params[0].name}<br/>`
+              params.forEach((param: any) => {
+                result += `${param.seriesName}: ${param.value}<br/>`
+              })
+              return result
+            }
+          },
+          legend: { 
+            data: measureColumns,
+            type: 'scroll',
+            bottom: 0
+          },
+          grid: { ...theme.grid, bottom: 30 },
+          xAxis: {
+            type: 'category',
+            data: dimensions,
+            axisLabel: {
+              rotate: dimensions.length > 10 ? 45 : 0,
+              hideOverlap: true
+            }
+          },
+          yAxis: { type: 'value' },
+          series: measureColumns.map((measure, index) => ({
+            name: measure,
+            type: 'line',
+            data: data.map(item => item[measure]),
+            smooth: true,
+            itemStyle: {
+              color: theme.colors[index % theme.colors.length]
+            }
+          }))
+        }
+        
+      case 'bar':
+        return {
+          title: { text: elementTitle || 'Comparison' },
+          tooltip: { 
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' }
+          },
+          legend: { 
+            data: measureColumns,
+            type: 'scroll',
+            bottom: 0
+          },
+          grid: { ...theme.grid, bottom: 30 },
+          xAxis: {
+            type: 'category',
+            data: dimensions,
+            axisLabel: {
+              rotate: dimensions.length > 8 ? 45 : 0,
+              hideOverlap: true,
+              interval: dimensions.length > 12 ? 'auto' : 0
+            }
+          },
+          yAxis: { type: 'value' },
+          series: measureColumns.map((measure, index) => ({
+            name: measure,
+            type: 'bar',
+            data: data.map(item => item[measure]),
+            itemStyle: {
+              color: theme.colors[index % theme.colors.length]
+            }
+          }))
+        }
+        
+      case 'pie':
+        const measureColumn = measureColumns[0] || columns[1]
+        return {
+          title: { text: elementTitle || 'Distribution' },
+          tooltip: { 
+            trigger: 'item',
+            formatter: '{a} <br/>{b}: {c} ({d}%)' 
+          },
+          legend: {
+            type: 'scroll',
+            orient: 'horizontal',
+            bottom: 0,
+            data: dimensions
+          },
+          series: [{
+            name: measureColumn,
+            type: 'pie',
+            radius: ['40%', '70%'],
+            avoidLabelOverlap: true,
+            itemStyle: {
+              borderRadius: 4,
+              borderColor: '#fff',
+              borderWidth: 2
+            },
+            label: {
+              show: true,
+              formatter: '{b}: {d}%'
+            },
+            emphasis: {
+              label: {
+                show: true,
+                fontWeight: 'bold'
+              },
+              itemStyle: {
+                shadowBlur: 10,
+                shadowOffsetX: 0,
+                shadowColor: 'rgba(0, 0, 0, 0.5)'
+              }
+            },
+            data: data.map((item, index) => ({ 
+              value: item[measureColumn], 
+              name: item[dimensionColumn],
+              itemStyle: { color: theme.colors[index % theme.colors.length] }
+            }))
+          }]
+        }
+        
+      case 'scatter':
+        const xColumn = measureColumns[0]
+        const yColumn = measureColumns[1]
+        return {
+          title: { text: elementTitle || 'Correlation' },
+          tooltip: {
+            trigger: 'item',
+            formatter: (params: any) => {
+              const dataIndex = params.dataIndex
+              const point = data[dataIndex]
+              const dimensionValue = point[dimensionColumn]
+              return `${dimensionValue}<br/>${xColumn}: ${point[xColumn]}<br/>${yColumn}: ${point[yColumn]}`
+            }
+          },
+          xAxis: {
+            type: 'value',
+            name: xColumn,
+            nameLocation: 'middle',
+            nameGap: 30
+          },
+          yAxis: {
+            type: 'value',
+            name: yColumn
+          },
+          series: [{
+            type: 'scatter',
+            data: data.map(item => [item[xColumn], item[yColumn]]),
+            symbolSize: 10
+          }]
+        }
+        
+      default:
+        return {}
+    }
+  }
+  
+  const mergeDeep = (target: any, source: any) => {
+    const isObject = (obj: any) => obj && typeof obj === 'object' && !Array.isArray(obj)
+    
+    if (!isObject(target) || !isObject(source)) {
+      return source
+    }
+    
+    Object.keys(source).forEach(key => {
+      if (isObject(source[key])) {
+        if (!target[key]) Object.assign(target, { [key]: {} })
+        mergeDeep(target[key], source[key])
+      } else {
+        Object.assign(target, { [key]: source[key] })
+      }
+    })
+    
+    return target
+  }
+  
+  const handleChartTypeChange = (elementTitle: string, chartType: string) => {
+    setChartPreferences(prev => ({
+      ...prev,
+      [elementTitle]: chartType
+    }))
+  }
+  
+  const renderQueryData = (data: any[], elementId: string, elementTitle: string) => {
     if (!data || data.length === 0) return <Box>No data available</Box>
     
-    // Get column headers from the first data item
+    const chartType = determineChartType(data, elementTitle)
+    const chartOptions = generateChartOptions(data, chartType, elementTitle)
+    
+    const chartTypes = ['bar', 'line', 'pie', 'scatter', 'table']
+    const customConfig = getChartConfigByTitle(elementTitle)
+    
+    return (
+      <Box height="450px" width="100%" mb="medium">
+        <Flex mb="small" alignItems="center" justifyContent="space-between">
+          <Box>
+            {!customConfig && (
+              <FieldCheckbox 
+                onChange={() => setAutoSelectChartType(!autoSelectChartType)} 
+                checked={autoSelectChartType}
+                label="Auto-select chart type"
+              />
+            )}
+            {customConfig && (
+              <Box color="neutral">Using custom chart configuration</Box>
+            )}
+          </Box>
+          {!customConfig && !autoSelectChartType && (
+            <ButtonGroup>
+              {chartTypes.map(type => (
+                <ButtonItem 
+                  key={type} 
+                  selected={chartPreferences[elementTitle] === type || (!chartPreferences[elementTitle] && chartType === type)}
+                  onClick={() => handleChartTypeChange(elementTitle, type)}
+                >
+                  {type.charAt(0).toUpperCase() + type.slice(1)}
+                </ButtonItem>
+              ))}
+            </ButtonGroup>
+          )}
+        </Flex>
+        
+        {(chartType === 'table' || chartPreferences[elementTitle] === 'table') ? (
+          renderDataTable(data)
+        ) : (
+          <Box height="400px" border="1px solid" borderColor="neutral-300" borderRadius="medium" p="small">
+            <ReactECharts 
+              option={chartOptions}
+              style={{ height: '100%', width: '100%' }}
+              opts={{ renderer: 'canvas' }}
+            />
+          </Box>
+        )}
+      </Box>
+    )
+  }
+  
+  const renderDataTable = (data: any[]) => {
+    if (!data || data.length === 0) return <Box>No data available</Box>
+    
     const columns = Object.keys(data[0])
     
     return (
@@ -399,7 +733,6 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
           {dashboardFilters.length > 0 && (
             <Box mb="large" p="medium" border="1px solid" borderColor="neutral-300" borderRadius="medium">
               <Form onSubmit={(e) => {
-                // Explicitly prevent form submission
                 e.preventDefault()
                 applyFilters(e)
               }}>
@@ -437,7 +770,7 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
             queryResults.map(result => (
               <Box key={result.elementId} mb="xlarge">
                 <Heading as="h2" mb="medium">{result.elementTitle}</Heading>
-                {renderQueryData(result.data)}
+                {renderQueryData(result.data, result.elementId, result.elementTitle)}
               </Box>
             ))
           ) : (

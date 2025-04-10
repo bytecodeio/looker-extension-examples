@@ -17,4 +17,5 @@ application: tabbed_dashboards_with_filters {
     use_form_submit: yes
     core_api_methods: ["dashboard", "dashboard_dashboard_filters", "all_connections","search_folders", "run_inline_query","run_query", "me", "all_roles"]
   }
+  
 }
