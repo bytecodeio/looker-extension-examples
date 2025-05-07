@@ -62,6 +62,7 @@ export const QueryEmbed: React.FC<QueryEmbedProps> = ({
       if (iframeRef.current) {
         iframeRef.current.innerHTML = ''
       }
+      // Optionally, you can also destroy the embed instance if needed
     }
   }, [clientId, extensionSDK])
 

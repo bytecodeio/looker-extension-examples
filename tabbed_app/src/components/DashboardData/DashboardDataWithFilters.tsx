@@ -32,9 +32,12 @@ import * as echarts from 'echarts'
 import { getChartConfigByTitle } from './chartConfigs'
 import { determineChartType, generateChartOptions, mergeDeep } from './chartConfigs/defaultChartConfig'
 import { QueryEmbed } from './QueryEmbed'
+import { getFilterGroupsByDashboardName } from './filterConfigs'
+import { FilterState, applyFiltersToQueries } from '../../utils'
 
 interface DashboardDataWithFiltersProps {
   dashboardId: string
+  tabName?: string // Added tab name prop
 }
 
 interface QueryResult {
@@ -44,15 +47,14 @@ interface QueryResult {
   clientId?: string
 }
 
-interface FilterState {
-  [key: string]: string | boolean | string[]
-}
-
 interface FilterSuggestions {
   [key: string]: string[]
 }
 
-export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> = ({ dashboardId }) => {
+export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> = ({ 
+  dashboardId,
+  tabName // Use the tab name if provided 
+}) => {
   const extensionContext = useContext<ExtensionContextData>(ExtensionContext)
   const sdk = extensionContext.core40SDK
   
@@ -67,7 +69,8 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   const [loadingSuggestions, setLoadingSuggestions] = useState<boolean>(false)
   const [chartPreferences, setChartPreferences] = useState<Record<string, string>>({})
   const [autoSelectChartType, setAutoSelectChartType] = useState<boolean>(true)
-  
+  const [filterGroups, setFilterGroups] = useState<{ groupName: string; fieldNames: string[] }[]>([])
+ 
   useEffect(() => {
     const fetchDashboardData = async () => {
       setLoading(true)
@@ -76,6 +79,13 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       try {
         const dashboardData = await sdk.ok(sdk.dashboard(dashboardId))
         setDashboard(dashboardData as IDashboard)
+        
+        // Get filter groups based on dashboard title or provided tab name
+        const dashboardName = tabName || dashboardData.title || ''
+        console.log('Looking for filter groups for dashboard:', dashboardName)
+        const groups = getFilterGroupsByDashboardName(dashboardName)
+        console.log('Found filter groups:', groups)
+        setFilterGroups(groups)
         
         if (dashboardData.dashboard_filters && dashboardData.dashboard_filters.length > 0) {
           setDashboardFilters(dashboardData.dashboard_filters)
@@ -139,32 +149,72 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       setError('No dashboard ID provided')
       setLoading(false)
     }
-  }, [dashboardId])
+  }, [dashboardId, tabName])
   
-  const fetchFilterSuggestions = async (filters: IDashboardFilter[]) => {
+
+
+  const fetchFilterSuggestions = async (filters: IDashboardFilter[], specificFilterName?: string, customFilterState?: FilterState) => {
     setLoadingSuggestions(true)
-    const suggestions: FilterSuggestions = {}
     
     try {
-      const suggestionPromises = filters
-        .filter(filter => filter.field?.type === 'string' && filter.dimension)
+      // If a specific filter name is provided, only fetch suggestions for that filter
+      const filtersToProcess = specificFilterName 
+        ? filters.filter(filter => filter.name === specificFilterName)
+        : filters.filter(filter => filter.field?.type === 'string' && filter.dimension);
+      
+      // Create a copy of the current suggestions
+      const updatedSuggestions = { ...filterSuggestions };
+      
+      // Use customFilterState if provided, otherwise use the current filterState
+      const currentFilterValues = customFilterState || filterState;
+      
+      const suggestionPromises = filtersToProcess
         .map(async (filter) => {
           try {
             const [view, field] = filter?.field?.suggest_dimension?.split('.') || []
+            const listeners = filter?.listens_to_filters
+            console.log(`Filter ${filter.name} listens to:`, listeners)
             const model = filter?.model 
             if (!model || !view || !field) return null
             
+            // Prepare filter constraints - use all filter values regardless of view
+            const filterConstraints: Record<string, string> = {}
+            
+            if (listeners && listeners.length > 0) {
+              listeners.forEach(listenerName => {
+                const listenerValue = currentFilterValues[listenerName]
+                if (listenerValue) {
+                  // Find the filter definition to get the dimension
+                  const listenerFilter = filters.find(f => f.name === listenerName)
+                  if (listenerFilter?.dimension) {
+                    // Just add the filter to constraints regardless of view
+                    if (Array.isArray(listenerValue)) {
+                      filterConstraints[listenerFilter.dimension] = listenerValue.join(',')
+                    } else {
+                      filterConstraints[listenerFilter.dimension] = listenerValue.toString()
+                    }
+                  }
+                }
+              })
+            }
+            
+            console.log(`Fetching suggestions for ${filter.name} with filter constraints:`, filterConstraints)
+            
+            // Prepare query body
+            const queryBody = {
+              model: model,
+              view: view,
+              fields: [filter?.field?.suggest_dimension],
+              filters: filterConstraints,
+              limit: '500',
+              sorts: [`${filter.dimension} asc`]
+            }
+            
             const queryResponse = await sdk.ok(sdk.run_inline_query({
-              body: {
-                model: model,
-                view: view,
-                fields: [filter?.field?.suggest_dimension],
-                filters: {},
-                limit: '500',
-                sorts: [filter.dimension + ' asc']
-              },
+              body: queryBody,
               result_format: 'json'
             }))
+            
             const values = queryResponse.map(row => {
               const key = Object.keys(row)[0]
               return row[key]?.toString() || ''
@@ -178,14 +228,18 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
         })
       
       const results = await Promise.all(suggestionPromises)
+      
+      // Update suggestions with new values
       results
         .filter(Boolean)
         .forEach(result => {
           if (result) {
-            suggestions[result.name] = result.values
+            updatedSuggestions[result.name] = result.values
           }
         })
-      setFilterSuggestions(suggestions)
+        
+      // Set all suggestions at once to avoid React state update issues
+      setFilterSuggestions(updatedSuggestions)
     } catch (error) {
       console.error('Error fetching filter suggestions:', error)
     } finally {
@@ -197,44 +251,12 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     try {
       setLoading(true)
       
-      const queryPromises = bodies.map(async (item) => {
-        try {
-          const queryBody = { ...item.queryBody }
-          
-          Object.keys(filters).forEach(filterName => {
-            const filterValue = filters[filterName]
-            if (filterValue && filterValue !== '') {
-              const dashFilter = dashboardFilters.find(df => df.name === filterName)
-              if (dashFilter && dashFilter.dimension) {
-                queryBody.filters[dashFilter.dimension] = filterValue.toString()
-              }
-            }
-          })
-          
-          const result = await sdk.ok(sdk.run_inline_query({
-            body: queryBody,
-            result_format: 'json'
-          }))
-          
-          return {
-            success: true,
-            elementId: item.elementId || '',
-            elementTitle: item.elementTitle || 'Untitled Element',
-            data: result,
-            clientId: item.clientId
-          }
-        } catch (error) {
-          console.error(`Error processing query for element ${item.elementId}:`, error)
-          return {
-            success: false,
-            elementId: item.elementId || '',
-            elementTitle: item.elementTitle || 'Untitled Element',
-            error
-          }
-        }
-      })
-      
-      const results = await Promise.all(queryPromises)
+      const results = await applyFiltersToQueries(
+        bodies,
+        filters,
+        dashboardFilters,
+        (queryParams) => sdk.ok(sdk.run_inline_query(queryParams))
+      )
       
       const successfulResults = results
         .filter(result => result.success)
@@ -272,6 +294,28 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       [filterName]: value
     }
     setFilterState(newFilterState)
+    
+    // Find any filters that listen to this changed filter
+    const dependentFilters = dashboardFilters.filter(
+      filter => filter.listens_to_filters && filter.listens_to_filters.includes(filterName)
+    )
+    
+    if (dependentFilters.length > 0) {
+      console.log(`Filter ${filterName} changed, refreshing suggestions for dependent filters:`, 
+        dependentFilters.map(f => f.name))
+      
+      // Fetch updated suggestions for each dependent filter, using the new filter state
+      dependentFilters.forEach(filter => {
+        fetchFilterSuggestions(dashboardFilters, filter.name, newFilterState)
+      })
+      
+      // Reset values for dependent filters when their parent filter changes
+      const updatedFilterState = { ...newFilterState }
+      dependentFilters.forEach(filter => {
+        updatedFilterState[filter.name] = ''
+      })
+      setFilterState(updatedFilterState)
+    }
   }
   
   const renderFilterControl = (filter: IDashboardFilter) => {
@@ -439,6 +483,55 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     return <MessageBar intent="critical">{error}</MessageBar>
   }
 
+  const DashboardFiltersComponent = ({ filters }: { filters: IDashboardFilter[] }) => {
+    // Create a set to track which filters have been rendered
+    const renderedFilters = new Set<string>()
+    
+    return (
+      <>
+        {/* Render filters by group */}
+        {filterGroups.map((group, groupIndex) => (
+          <Box key={`group-${groupIndex}`} mb="medium">
+            <Heading as="h4" mb="small">{group.groupName}</Heading>
+            <Flex flexWrap="wrap" gap="small">
+              {filters
+                .filter((thisFilter: IDashboardFilter) => 
+                  group.fieldNames.includes(thisFilter.name || '') && !renderedFilters.has(thisFilter.id)
+                )
+                .map(filter => {
+                  // Mark filter as rendered
+                  renderedFilters.add(filter.id)
+                  return (
+                    <FlexItem key={filter.id} width="250px">
+                      {renderFilterControl(filter)}
+                    </FlexItem>
+                  )
+                })
+              }
+            </Flex>
+          </Box>
+        ))}
+        
+        {/* Render remaining filters that aren't in any group */}
+        {filters.some(filter => !renderedFilters.has(filter.id)) && (
+          <Box mb="medium">
+            <Heading as="h4" mb="small">Other Filters</Heading>
+            <Flex flexWrap="wrap" gap="small">
+              {filters
+                .filter((filter: IDashboardFilter) => !renderedFilters.has(filter.id))
+                .map(filter => (
+                  <FlexItem key={filter.id} width="250px">
+                    {renderFilterControl(filter)}
+                  </FlexItem>
+                ))
+              }
+            </Flex>
+          </Box>
+        )}
+      </>
+    )
+  }
+
   return (
     <Box p="large">
       {dashboard && (
@@ -457,20 +550,16 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
                     <Spinner size={20} /> Loading filter suggestions...
                   </Box>
                 )}
-                <Flex flexWrap="wrap" gap="medium">
-                  {dashboardFilters.map(filter => (
-                    <FlexItem key={filter.id} width="250px">
-                      {renderFilterControl(filter)}
-                    </FlexItem>
-                  ))}
-                  <FlexItem alignSelf="flex-end">
-                    <ButtonOutline 
-                      type="button" 
-                      onClick={(e) => applyFilters(e)}>
-                      Apply Filters
-                    </ButtonOutline>
-                  </FlexItem>
-                </Flex>
+                
+                <DashboardFiltersComponent filters={dashboardFilters} />
+                
+                <Box mt="medium">
+                  <ButtonOutline 
+                    type="button" 
+                    onClick={(e) => applyFilters(e)}>
+                    Apply Filters
+                  </ButtonOutline>
+                </Box>
               </Form>
             </Box>
           )}

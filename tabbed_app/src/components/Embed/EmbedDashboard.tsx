@@ -195,7 +195,10 @@ export const EmbedDashboard: React.FC<EmbedProps> = ({
                   setDashboard={setupDashboard}
                 /> */}
                 <DashboardDataWithFilters
-                  dashboardId={String(configurationData.dashboards[index].id)}/>
+                  key={index.toString()}
+                  dashboardId={String(configurationData.dashboards[index].id)}
+                  tabName={title} // Pass the tab name (title) to the component
+                />
               </Tab2>
             )
           })}
