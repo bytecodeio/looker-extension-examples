@@ -80,6 +80,15 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   // State to track the last changed filter
   const [lastChangedFilter, setLastChangedFilter] = useState<FilterChangeInfo | null>(null)
  
+  /**
+   * useEffect hook that initializes the component by:
+   * - Fetching dashboard data using the provided dashboardId
+   * - Setting up filter groups based on dashboard name or tabName
+   * - Initializing filter states with default values
+   * - Fetching filter suggestions for dropdown menus
+   * - Extracting query bodies from dashboard elements
+   * - Executing initial queries without filters
+   */
   useEffect(() => {
     const fetchDashboardData = async () => {
       setLoading(true)
@@ -162,6 +171,16 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   
 
 
+  /**
+   * Fetches filter suggestions for dropdown menus by querying Looker's API
+   * - Can fetch suggestions for all filters or a specific filter
+   * - Supports applying parent filter values to respect filter hierarchies
+   * - Returns unique values for each filter field
+   * 
+   * @param filters - List of dashboard filters to process
+   * @param specificFilterName - Optional name of a specific filter to process
+   * @param customFilterState - Optional custom filter state to use instead of the current state
+   */
   const fetchFilterSuggestions = async (filters: IDashboardFilter[], specificFilterName?: string, customFilterState?: FilterState) => {
     setLoadingSuggestions(true)
     
@@ -283,6 +302,15 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }
   
+  /**
+   * Batch version of fetchFilterSuggestions that processes multiple filters sequentially
+   * - Used when multiple dependent filters need to be updated after a parent filter changes
+   * - Processes each filter in sequence to avoid race conditions
+   * - Updates all suggestions in a single state update for better performance
+   * 
+   * @param filters - List of filters to fetch suggestions for
+   * @param customFilterState - Current filter state to use for applying parent filter values
+   */
   const fetchFilterSuggestionsBatch = async (filters: IDashboardFilter[], customFilterState: FilterState) => {
     if (!filters || filters.length === 0) return
     
@@ -383,6 +411,15 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }
   
+  /**
+   * Executes dashboard queries with the current filter state
+   * - Applies filters to query bodies using the applyFiltersToQueries utility
+   * - Handles successful and failed queries separately
+   * - Updates queryResults state with the query results
+   * 
+   * @param bodies - Array of query bodies to execute
+   * @param filters - Current filter state to apply to the queries
+   */
   const executeQueries = async (bodies: any[], filters: FilterState) => {
     try {
       setLoading(true)
@@ -417,6 +454,13 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }
   
+  /**
+   * Event handler for the Apply Filters button
+   * - Prevents default form submission behavior if called from a form
+   * - Triggers query execution with the current filter state
+   * 
+   * @param e - Optional event object
+   */
   const applyFilters = (e) => {
     if (e && e.preventDefault) {
       e.preventDefault()
@@ -424,6 +468,14 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     executeQueries(queryBodies, filterState)
   }
   
+  /**
+   * Handles filter value changes
+   * - Updates the filter state with the new value
+   * - Records which filter changed to trigger dependent filter updates
+   * 
+   * @param filterName - Name of the filter that changed
+   * @param value - New value for the filter (can be string, boolean, or array)
+   */
   const handleFilterChange = (filterName: string, value: string | boolean | string[]) => {
     console.log(`Filter ${filterName} changed to:`, value)
     
@@ -462,6 +514,15 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }, [lastChangedFilter, filterState, dashboardFilters]);
 
+  /**
+   * Renders the appropriate filter control based on filter type
+   * - Supports boolean, number, and string filter types
+   * - Uses dropdown for string filters with suggestions
+   * - Uses text input for filters without suggestions
+   * 
+   * @param filter - Dashboard filter definition
+   * @returns React element representing the appropriate filter control
+   */
   const renderFilterControl = (filter: IDashboardFilter) => {
     const filterType = filter.field?.type || 'string'
     const currentValue = filterState[filter.name]
@@ -520,6 +581,14 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }
   }
   
+  /**
+   * Handles chart type preference changes
+   * - Updates the chartPreferences state with the new preference
+   * - Used when the user manually selects a chart type
+   * 
+   * @param elementTitle - Title of the dashboard element
+   * @param chartType - Selected chart type (bar, line, pie, scatter, table)
+   */
   const handleChartTypeChange = (elementTitle: string, chartType: string) => {
     setChartPreferences(prev => ({
       ...prev,
@@ -527,6 +596,19 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     }))
   }
   
+  /**
+   * Renders query data using the appropriate visualization
+   * - Determines chart type based on data structure or user preference
+   * - Uses embedded visualization if client ID is available
+   * - Renders ECharts visualization with appropriate options
+   * - Falls back to table view for tabular data or by user preference
+   * 
+   * @param data - Query result data to visualize
+   * @param elementId - ID of the dashboard element
+   * @param elementTitle - Title of the dashboard element
+   * @param clientId - Optional client ID for embedded visualizations
+   * @returns React element representing the visualization
+   */
   const renderQueryData = (data: any[], elementId: string, elementTitle: string, clientId?: string) => {
     if (!data || data.length === 0) return <Box>No data available</Box>
     
@@ -590,6 +672,14 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     )
   }
   
+  /**
+   * Renders query data as a table
+   * - Creates table headers from data keys
+   * - Renders each row of data in table cells
+   * 
+   * @param data - Query result data to display
+   * @returns React element representing the data table
+   */
   const renderDataTable = (data: any[]) => {
     if (!data || data.length === 0) return <Box>No data available</Box>
     
@@ -631,6 +721,15 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
     return <MessageBar intent="critical">{error}</MessageBar>
   }
 
+  /**
+   * Component that renders dashboard filters organized by filter groups
+   * - Renders filters in groups based on the filterGroups configuration
+   * - Renders remaining filters in an "Other Filters" section
+   * - Uses renderFilterControl to render each individual filter
+   * 
+   * @param filters - List of dashboard filters to render
+   * @returns React element containing grouped filter controls
+   */
   const DashboardFiltersComponent = ({ filters }: { filters: IDashboardFilter[] }) => {
     // Create a set to track which filters have been rendered
     const renderedFilters = new Set<string>()
