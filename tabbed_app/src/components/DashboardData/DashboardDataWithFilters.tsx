@@ -51,6 +51,12 @@ interface FilterSuggestions {
   [key: string]: string[]
 }
 
+interface FilterChangeInfo {
+  filterName: string;
+  value: string | boolean | string[];
+  timestamp: number;
+}
+
 export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> = ({ 
   dashboardId,
   tabName // Use the tab name if provided 
@@ -70,6 +76,9 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   const [chartPreferences, setChartPreferences] = useState<Record<string, string>>({})
   const [autoSelectChartType, setAutoSelectChartType] = useState<boolean>(true)
   const [filterGroups, setFilterGroups] = useState<{ groupName: string; fieldNames: string[] }[]>([])
+  
+  // State to track the last changed filter
+  const [lastChangedFilter, setLastChangedFilter] = useState<FilterChangeInfo | null>(null)
  
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -171,14 +180,26 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       const suggestionPromises = filtersToProcess
         .map(async (filter) => {
           try {
-            const [view, field] = filter?.field?.suggest_dimension?.split('.') || []
             const listeners = filter?.listens_to_filters
             console.log(`Filter ${filter.name} listens to:`, listeners)
-            const model = filter?.model 
-            if (!model || !view || !field) return null
             
-            // Prepare filter constraints - use all filter values regardless of view
-            const filterConstraints: Record<string, string> = {}
+            // Parse dimension to get model, view, and field
+            const dimension = filter?.dimension
+            if (!dimension) return null
+            
+            // Split dimension into view and field parts (view.field)
+            const [viewName, fieldName] = dimension.split('.')
+            if (!viewName || !fieldName) return null
+            
+            // Get model name from filter
+            const modelName = filter?.model
+            if (!modelName) return null
+            
+            const exploreName = filter?.explore
+            if (!exploreName) return null
+            
+            // Create a filter object for the query
+            const queryFilters: Record<string, string> = {}
             
             if (listeners && listeners.length > 0) {
               listeners.forEach(listenerName => {
@@ -187,43 +208,58 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
                   // Find the filter definition to get the dimension
                   const listenerFilter = filters.find(f => f.name === listenerName)
                   if (listenerFilter?.dimension) {
-                    // Just add the filter to constraints regardless of view
+                    // Add filter to the query filters
                     if (Array.isArray(listenerValue)) {
-                      filterConstraints[listenerFilter.dimension] = listenerValue.join(',')
+                      queryFilters[listenerFilter.dimension] = listenerValue.join(',')
                     } else {
-                      filterConstraints[listenerFilter.dimension] = listenerValue.toString()
+                      queryFilters[listenerFilter.dimension] = listenerValue.toString()
                     }
                   }
                 }
               })
             }
             
-            console.log(`Fetching suggestions for ${filter.name} with filter constraints:`, filterConstraints)
+            console.log(`Fetching suggestions for ${filter.name} with filters:`, queryFilters)
             
-            // Prepare query body
-            const queryBody = {
-              model: model,
-              view: view,
-              fields: [filter?.field?.suggest_dimension],
-              filters: filterConstraints,
-              limit: '500',
-              sorts: [`${filter.dimension} asc`]
+            try {
+              // Use run_inline_query which we know works properly
+              const queryResponse = await sdk.ok(sdk.run_inline_query({
+                body: {
+                  model: modelName,
+                  view: exploreName,
+                  fields: [dimension],
+                  filters: queryFilters,
+                  limit: '500',
+                  // Sort values alphabetically for better UX
+                  sorts: [`${dimension} asc`]
+                },
+                result_format: 'json'
+              }))
+              
+              // Extract unique values from the response
+              const values: Set<string> = new Set()
+              
+              if (Array.isArray(queryResponse)) {
+                queryResponse.forEach(row => {
+                  const value = row[dimension]
+                  if (value !== null && value !== undefined) {
+                    values.add(value.toString())
+                  }
+                })
+              }
+              
+              const uniqueValues = Array.from(values)
+              console.log(`Found ${uniqueValues.length} suggestions for ${filter.name}`)
+              
+              return { name: filter.name, values: uniqueValues }
+            } catch (sdkError) {
+              console.error(`SDK error fetching suggestions for ${filter.name}:`, sdkError)
+              // Return empty values array but don't fail the entire promise
+              return { name: filter.name, values: [] }
             }
-            
-            const queryResponse = await sdk.ok(sdk.run_inline_query({
-              body: queryBody,
-              result_format: 'json'
-            }))
-            
-            const values = queryResponse.map(row => {
-              const key = Object.keys(row)[0]
-              return row[key]?.toString() || ''
-            }).filter(Boolean)
-            
-            return { name: filter.name, values }
           } catch (error) {
             console.error(`Error fetching suggestions for filter ${filter.name}:`, error)
-            return null
+            return { name: filter.name, values: [] }
           }
         })
       
@@ -242,6 +278,106 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
       setFilterSuggestions(updatedSuggestions)
     } catch (error) {
       console.error('Error fetching filter suggestions:', error)
+    } finally {
+      setLoadingSuggestions(false)
+    }
+  }
+  
+  const fetchFilterSuggestionsBatch = async (filters: IDashboardFilter[], customFilterState: FilterState) => {
+    if (!filters || filters.length === 0) return
+    
+    setLoadingSuggestions(true)
+    
+    try {
+      console.log(`Batch fetching suggestions for ${filters.length} filters:`, 
+        filters.map(f => f.name))
+      
+      // Create a copy of the current suggestions
+      const updatedSuggestions = { ...filterSuggestions }
+      
+      // Process each filter in sequence to avoid race conditions
+      for (const filter of filters) {
+        try {
+          // Skip if this filter is somehow no longer relevant
+          if (!filter.name) continue
+          
+          const dimension = filter?.dimension
+          if (!dimension) continue
+          
+          const [viewName, fieldName] = dimension.split('.')
+          if (!viewName || !fieldName) continue
+          
+          const modelName = filter?.model
+          if (!modelName) continue
+          
+          const exploreName = filter?.explore
+          if (!exploreName) continue
+          
+          // Create a filter object for the query
+          const queryFilters: Record<string, string> = {}
+          
+          // Apply any parent filter values
+          const listeners = filter?.listens_to_filters
+          if (listeners && listeners.length > 0) {
+            listeners.forEach(listenerName => {
+              const listenerValue = customFilterState[listenerName]
+              if (listenerValue) {
+                // Find the filter definition to get the dimension
+                const listenerFilter = dashboardFilters.find(f => f.name === listenerName)
+                if (listenerFilter?.dimension) {
+                  // Add filter to the query filters
+                  if (Array.isArray(listenerValue)) {
+                    queryFilters[listenerFilter.dimension] = listenerValue.join(',')
+                  } else {
+                    queryFilters[listenerFilter.dimension] = listenerValue.toString()
+                  }
+                }
+              }
+            })
+          }
+          
+          console.log(`Fetching batch suggestions for ${filter.name} with filters:`, queryFilters)
+          
+          // Use run_inline_query to fetch suggestions
+          const queryResponse = await sdk.ok(sdk.run_inline_query({
+            body: {
+              model: modelName,
+              view: exploreName,
+              fields: [dimension],
+              filters: queryFilters,
+              limit: '500',
+              sorts: [`${dimension} asc`]
+            },
+            result_format: 'json'
+          }))
+          
+          // Extract unique values from the response
+          const values: Set<string> = new Set()
+          
+          if (Array.isArray(queryResponse)) {
+            queryResponse.forEach(row => {
+              const value = row[dimension]
+              if (value !== null && value !== undefined) {
+                values.add(value.toString())
+              }
+            })
+          }
+          
+          const uniqueValues = Array.from(values)
+          console.log(`Found ${uniqueValues.length} suggestions for ${filter.name}`)
+          
+          // Update suggestions for this filter
+          updatedSuggestions[filter.name] = uniqueValues
+        } catch (error) {
+          console.error(`Error fetching batch suggestions for filter ${filter.name}:`, error)
+          // Continue with the next filter even if one fails
+        }
+      }
+      
+      // Update all suggestions at once
+      setFilterSuggestions(updatedSuggestions)
+    } catch (error) {
+      console.error('Error in batch filter suggestion fetch:', error)
     } finally {
       setLoadingSuggestions(false)
     }
@@ -289,35 +425,43 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
   }
   
   const handleFilterChange = (filterName: string, value: string | boolean | string[]) => {
-    const newFilterState = {
-      ...filterState,
+    console.log(`Filter ${filterName} changed to:`, value)
+    
+    // Just update this filter's value
+    setFilterState(prevState => ({
+      ...prevState,
       [filterName]: value
-    }
-    setFilterState(newFilterState)
+    }))
     
-    // Find any filters that listen to this changed filter
-    const dependentFilters = dashboardFilters.filter(
-      filter => filter.listens_to_filters && filter.listens_to_filters.includes(filterName)
-    )
-    
-    if (dependentFilters.length > 0) {
-      console.log(`Filter ${filterName} changed, refreshing suggestions for dependent filters:`, 
-        dependentFilters.map(f => f.name))
-      
-      // Fetch updated suggestions for each dependent filter, using the new filter state
-      dependentFilters.forEach(filter => {
-        fetchFilterSuggestions(dashboardFilters, filter.name, newFilterState)
-      })
-      
-      // Reset values for dependent filters when their parent filter changes
-      const updatedFilterState = { ...newFilterState }
-      dependentFilters.forEach(filter => {
-        updatedFilterState[filter.name] = ''
-      })
-      setFilterState(updatedFilterState)
-    }
+    // Record which filter changed to trigger the useEffect
+    setLastChangedFilter({ 
+      filterName, 
+      value, 
+      timestamp: Date.now() 
+    })
   }
   
+  // Effect to handle updates when a filter changes
+  useEffect(() => {
+    if (!lastChangedFilter || !lastChangedFilter.filterName) return;
+    
+    // Find any filters that listen to the changed filter
+    const dependentFilters = dashboardFilters.filter(
+      filter => filter.listens_to_filters && 
+      filter.listens_to_filters.includes(lastChangedFilter.filterName)
+    );
+    
+    if (dependentFilters.length > 0) {
+      console.log(
+        `Filter ${lastChangedFilter.filterName} changed to ${lastChangedFilter.value}, updating suggestions for:`, 
+        dependentFilters.map(f => f.name)
+      );
+      
+      // Fetch suggestions for dependent filters with the updated filter state
+      fetchFilterSuggestionsBatch(dependentFilters, filterState);
+    }
+  }, [lastChangedFilter, filterState, dashboardFilters]);
+
   const renderFilterControl = (filter: IDashboardFilter) => {
     const filterType = filter.field?.type || 'string'
     const currentValue = filterState[filter.name]
@@ -343,13 +487,17 @@ export const DashboardDataWithFilters: React.FC<DashboardDataWithFiltersProps> =
         )
       case 'string':
         if (suggestions.length > 0) {
+          // Create options from suggestions
+          let options = suggestions.map(option => ({ value: option, label: option }))
+          console.log('Filter options for:',filter.name, options)
           return (
             <FieldSelect
               label={filter.title || filter.name}
-              options={suggestions.map(option => ({ value: option, label: option }))}
+              options={options}
               value={currentValue as string || ''}
               onChange={(value) => handleFilterChange(filter.name, value)}
               placeholder="Select a value"
+              clearable={true}
             />
           )
         } else {
